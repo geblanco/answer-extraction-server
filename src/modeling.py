@@ -8,10 +8,13 @@ from transformers import (
     BertTokenizer,
     BertForQuestionAnswering,
     squad_convert_examples_to_features,
-    compute_predictions_logits,
+)
+from transformers.data.processors.squad import (
     SquadExample,
     SquadResult,
 )
+
+from transformers.data.metrics.squad_metrics import compute_predictions_logits
 
 NOF_THREADS = 8
 default_params = json.load(open('./default_params.json', 'r'))
@@ -142,6 +145,7 @@ class TransformerQuestionAnswering(QuestionAnswering):
 
     def find_answers_simple(self, data):
         answers = []
+        self.model.eval()
         for par in data['paragraphs']:
             context = par['context']
             for qa in par['qas']:
@@ -184,4 +188,4 @@ class TransformerQuestionAnswering(QuestionAnswering):
         user_params = default_params.copy()
         if params is not None:
             user_params.update(**params)
-        cls(model, tokenizer, user_params)
+        return cls(model, tokenizer, user_params)
