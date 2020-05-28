@@ -1,5 +1,4 @@
 import os
-import json
 import base64
 import argparse
 
@@ -7,6 +6,8 @@ import argparse
 from flask import Flask, request, jsonify
 from gevent.pywsgi import WSGIServer
 
+# from qa_system import QA_System
+from modeling import TransformerQuestionAnswering
 
 DEFAULT_ROUTE = 'qa-extraction'
 DEFAULT_PORT = 8000
@@ -17,7 +18,7 @@ def parse_args():
     parser.add_argument(
         '--model', '-m', required=True, type=str, help='Model to serve'
     )
-    parse.add_argument(
+    parser.add_argument(
         '--route', '-r', required=False, default=DEFAULT_ROUTE,
         help=f'Route to serve (default: {DEFAULT_ROUTE})'
     )
@@ -40,21 +41,15 @@ def is_opt_encoded(data):
     return data.get('options', {}).get('encoded', False)
 
 
-def preprocess_input(data):
-    if data is None:
-        return None
-
-    if not is_opt_encoded(data):
-        return data
-
+def apply_fn_to_qa_fields(data, text_fn):
     proc_data = data.copy()
     for i, par in enumerate(proc_data['paragraphs']):
         proc_par = par.copy()
-        proc_par['context'] = decode_text(par['context'])
+        proc_par['context'] = text_fn(par['context'])
         proc_par['qas'] = [
             {
                 'qid': qa['qid'],
-                'question': decode_text(qa['question'])
+                'question': text_fn(qa['question'])
             }
             for qa in par['qas']
         ]
@@ -62,22 +57,34 @@ def preprocess_input(data):
     return proc_data
 
 
-def get_response(model_answers, orig_data):
-    if is_opt_encoded(orig_data):
+def preprocess_input(data):
+    if data is None:
+        return None
+
+    if not is_opt_encoded(data):
+        return data
+
+    return apply_fn_to_qa_fields(data, decode_text)
+
+
+def prepare_response(data):
+    if is_opt_encoded(data):
         # encode data
-        pass
-    return {}
+        data = apply_fn_to_qa_fields(data, encode_text)
+    return data
 
 
 def setup_route(app, route, port, model_path):
-    model = Predictor.from_path(model)
+    model = TransformerQuestionAnswering.from_path(model_path)
 
     @app.route(f'/{route}', methods=['POST'])
     def serve_route():
+        # decode if needed
         data = preprocess_input(request.get_json())
         if data is None:
             return jsonify({})
-        return jsonify(get_response(model.find_answer(data), data))
+        return jsonify(prepare_response(model.find_answer(data)))
+
 
 def serve(model_path, route, port):
     app = Flask(__name__)
@@ -86,7 +93,7 @@ def serve(model_path, route, port):
     setup_route(app, route, port, model_path)
     # serve on all interfaces with ip on given port
     http_server = WSGIServer(('0.0.0.0', port), app)
-    print(f'Ready for requests!')
+    print('Ready for requests!')
     http_server.serve_forever()
 
 

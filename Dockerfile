@@ -1,8 +1,8 @@
-MAINTAINER 'gblanco@lsi.uned.es'
 FROM python:3.7
+MAINTAINER 'gblanco'
 
+#### NVIDIA Stuff
 # use nvidia if possible
-
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
 
@@ -16,6 +16,7 @@ ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
 LABEL com.nvidia.volumes.needed="nvidia_driver"
+####
 
 WORKDIR /usr/app/
 COPY /src /usr/app/
@@ -30,6 +31,13 @@ COPY ./requirements.txt /usr/app
 #   mv /app/models/uncased_L-12_H-768_A-12/config.json /app/models/uncased_L-12_H-768_A-12/bert_config.json
 
 RUN pip install -r requirements.txt
-EXPOSE 9000
 
-CMD ["bert-serving-start" "-num_worker=2" "-cpu" "-fp16" "-http_port 9000" "-model_dir /app/models/bert/uncased_L-12_H-768_A-12/"]
+# install nodejs and forever command
+RUN curl -sL https://deb.nodesource.com/setup_12.x | bash - && \
+  apt install -y nodejs && \
+  npm install -g forever
+
+EXPOSE 8000
+
+# long-running process
+ENTRYPOINT ["forever", "-c", "python", "app.py"]

@@ -1,0 +1,12 @@
+{
+    "max_seq_length": 384,
+    "pad_on_left": false,
+    "pad_token_segment_id": 0,
+    "doc_stride": 128,
+    "max_query_length": 64,
+    "batch_size": 16,
+    "device": "cpu",
+    "model_type": "bert",
+    "do_lower_case": false,
+    "null_score_diff_threshold": 0.0
+}
