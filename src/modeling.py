@@ -1,32 +1,39 @@
+import os
 import json
 import torch
-
+import concurrent.futures as cf
 
 from tqdm import tqdm
+from functools import partial
+from multiprocessing import Pool, cpu_count
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
+    AutoConfig,
+    AutoTokenizer,
     BertTokenizer,
     BertForQuestionAnswering,
-    squad_convert_examples_to_features,
+    AutoModelForQuestionAnswering,
 )
 from transformers.data.processors.squad import (
     SquadExample,
     SquadResult,
+    squad_convert_examples_to_features,
+    squad_convert_example_to_features,
 )
 
-from transformers.data.metrics.squad_metrics import compute_predictions_logits
+from squad_metrics import compute_predictions_logits
 
-NOF_THREADS = 8
-default_params = json.load(open('./default_params.json', 'r'))
+src_path = os.path.abspath(os.path.dirname(__file__))
+default_config_path = os.path.join(src_path, 'default_params.json')
+
+NOF_THREADS = min(8, cpu_count())
+default_params = json.load(open(default_config_path, 'r'))
 
 
 class QuestionAnswering(object):
 
     def find_answers(self, data):
         raise NotImplementedError('You must override `find_answers` method!')
-
-    def to_list(tensor):
-        return tensor.detach().cpu().tolist()
 
     @classmethod
     def from_pretrained(cls, path_or_name, params=None):
@@ -56,15 +63,62 @@ class QuestionAnswering(object):
 
         return examples
 
+    @staticmethod
+    def to_list(tensor):
+        return tensor.detach().cpu().tolist()
+
+    @staticmethod
+    def features_to_tensors(features):
+        all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+        all_attention_masks = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
+        all_token_type_ids = torch.tensor([f.token_type_ids for f in features], dtype=torch.long)
+        all_feature_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
+        all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
+        all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
+        return (
+            all_input_ids,
+            all_attention_masks,
+            all_token_type_ids,
+            all_feature_index,
+            all_cls_index,
+            all_p_mask,
+        )
+
+    @staticmethod
+    def convert_examples_to_features(examples, tokenizer, params, nof_threads):
+        # ToDo := Fix threading tokenizer (squad converter expects tokenizer to be global)
+        # Hint: Extract method from squad.py?
+        features = []
+
+        def squad_convert_caller(*args, **kwargs):
+            global tokenizer
+            return squad_convert_example_to_features(*args, **kwargs)
+
+        with cf.ThreadPoolExecutor(max_workers=nof_threads) as executor:
+            annotate_ = partial(
+                squad_convert_caller,
+                max_seq_length=params['max_seq_length'],
+                doc_stride=params['doc_stride'],
+                max_query_length=params['max_query_length'],
+                is_training=False,
+            )
+            for feat in executor.map(annotate_, examples):
+                features.append(feat)
+
+        return features
+
+
 
 class TransformerQuestionAnswering(QuestionAnswering):
 
-    def __init__(self, model, tokenizer, params):
+    def __init__(self, model, config, tokenizer, params):
         self.model = model
+        self.config = config
         self.tokenizer = tokenizer
         self.params = params
 
-    def forward_batch_for_logits(self, features, batch):
+    def forward_batch_for_results(self, features, batch):
+        all_results = []
         self.model.eval()
         batch = tuple(t.to(self.params['device']) for t in batch)
 
@@ -75,10 +129,21 @@ class TransformerQuestionAnswering(QuestionAnswering):
                 'token_type_ids': batch[2],
             }
 
-            if self.params['model_type'] in ['xlm', 'roberta', 'distilbert', 'camembert']:
+            if self.config.model_type in ['xlm', 'roberta', 'distilbert', 'camembert']:
                 del inputs['token_type_ids']
 
             feature_indices = batch[3]
+
+            # XLNet and XLM use more arguments for their predictions
+            if self.config.model_type in ["xlnet", "xlm"]:
+                inputs.update({"cls_index": batch[4], "p_mask": batch[5]})
+                # for lang_id-sensitive xlm models
+                if hasattr(self.model, "config") and hasattr(self.model.config, "lang2id"):
+                    lang_id = self.params.get('lang_id', 1)
+                    inputs.update(
+                        {"langs": (torch.ones(batch[0].shape, dtype=torch.int64) * lang_id).to(self.params['device'])}
+                    )
+
             outputs = self.model(**inputs)
 
         for i, feature_index in enumerate(feature_indices):
@@ -86,12 +151,33 @@ class TransformerQuestionAnswering(QuestionAnswering):
             feature = features[feature_index.item()]
             unique_id = int(feature.unique_id)
 
-            output = [self.to_list(output[i]) for output in outputs]
-            start_logits, end_logits = output
+            output = [QuestionAnswering.to_list(output[i]) for output in outputs]
+            # Some models (XLNet, XLM) use 5 arguments for their predictions, while the other "simpler"
+            # models only use two.
+            if len(output) >= 5:
+                start_logits = output[0]
+                start_top_index = output[1]
+                end_logits = output[2]
+                end_top_index = output[3]
+                cls_logits = output[4]
 
-        return unique_id, start_logits, end_logits
+                result = SquadResult(
+                    unique_id,
+                    start_logits,
+                    end_logits,
+                    start_top_index=start_top_index,
+                    end_top_index=end_top_index,
+                    cls_logits=cls_logits,
+                )
+            else:
+                start_logits, end_logits = output
+                result = SquadResult(unique_id, start_logits, end_logits)
 
-    def find_answers_batch(self, data, n_best_size=5, max_answer_length=30):
+            all_results.append(result)
+
+        return all_results
+
+    def find_answers_batch(self, data, n_best_size=10, max_answer_length=30):
         """
         GPU Needed?
         Procedure: Convert data to tensor dataset and batch on it
@@ -122,9 +208,8 @@ class TransformerQuestionAnswering(QuestionAnswering):
         all_results = []
 
         for batch in tqdm(dataloader, desc="Evaluating"):
-            unique_id, start_logits, end_logits = \
-                self.forward_batch_for_logits(features, batch)
-            all_results.append(SquadResult(unique_id, start_logits, end_logits))
+            results = self.forward_batch_for_results(features, batch)
+            all_results.extend(results)
 
         # If null_score - best_non_null is greater than the
         # threshold predict null.
@@ -136,56 +221,68 @@ class TransformerQuestionAnswering(QuestionAnswering):
             n_best_size,
             max_answer_length,
             do_lower_case=self.params['do_lower_case'],
-            verbose_logging=True,
             version_2_with_negative=True,
             null_score_diff_threshold=threshold,
             tokenizer=self.tokenizer,
         )
         return predictions
 
-    def find_answers_simple(self, data):
-        answers = []
-        self.model.eval()
-        for par in data['paragraphs']:
-            context = par['context']
-            for qa in par['qas']:
-                # ToDo := tokenizer options, crop, etc
-                qa_enc = self.tokenizer.encode_plus(context, qa['question'])
-                input_ids, token_type_ids = qa_enc['input_ids'], qa_enc['token_type_ids']
-                start_scores, end_scores = self.model(
-                    torch.tensor([input_ids]),
-                    token_type_ids=torch.tensor([token_type_ids])
-                )
+    def find_answers_simple(self, data, n_best_size=10, max_answer_length=30):
+        pass
+        # # ToDo := Fix threding conversion
+        # all_results = []
+        # batch_size = self.params['batch_size']
+        # examples = QuestionAnswering.create_examples(data)
+        # features = QuestionAnswering.convert_examples_to_features(
+        #     examples,
+        #     self.tokenizer,
+        #     self.params,
+        #     min(8, cpu_count()),
+        # )
+        # nof_features = len(features)
+        # tensors = QuestionAnswering.features_to_tensors(features)
+        # for batch_index in range(0, nof_features, batch_size):
+        #     batch_start = batch_index * batch_size
+        #     batch_end = min(batch_start + batch_size, nof_features)
+        #     batch = tensors[batch_start: batch_end]
+        #     result = self.forward_batch_for_results(features, batch)
+        #     all_results.append(result)
 
-                all_tokens = self.tokenizer.convert_ids_to_tokens(input_ids)
-                answer = ' '.join(all_tokens[torch.argmax(start_scores): torch.argmax(end_scores)+1])
+        # # If null_score - best_non_null is greater than the
+        # # threshold predict null.
+        # threshold = self.params['null_score_diff_threshold']
+        # predictions = compute_predictions_logits(
+        #     examples,
+        #     features,
+        #     all_results,
+        #     n_best_size,
+        #     max_answer_length,
+        #     do_lower_case=self.params['do_lower_case'],
+        #     version_2_with_negative=True,
+        #     null_score_diff_threshold=threshold,
+        #     tokenizer=self.tokenizer,
+        # )
+        # return predictions
 
-                answers.append(dict(
-                    qid=qa['qid'],
-                    text=answer,
-                    probability=None,
-                    start_logits=start_scores,
-                    end_logits=end_scores,
-                ))
-
-        return answers
-
-    def find_answers(self, data):
-        answers = None
+    def find_answers(self, data, n_best_size=1):
+        answers, nbest = self.find_answers_batch(data, n_best_size)
         # by now, only batch process on GPU
-        if self.params['device'] != 'cpu' and len(data['paragraphs']) > 50:
-            # allow default answer len and n_best size
-            # ToDo := Add to public API
-            answers = self.find_answers_batch(data)
-        else:
-            answers = self.find_answers_simple(data)
-        return answers
+        # if self.params['device'] != 'cpu' and len(data['paragraphs']) > 50:
+        #     # allow default answer len and n_best size
+        #     # ToDo := Add to public API
+        #     answers = self.find_answers_batch(data)
+        # else:
+        #     answers = self.find_answers_simple(data)
+        if n_best_size < len(nbest[0]):
+            nbest = [best[:n_best_size] for best in nbest]
+        return answers, nbest
 
     @classmethod
     def from_pretrained(cls, path_or_name, params=None):
-        model = BertForQuestionAnswering.from_pretrained(path_or_name)
-        tokenizer = BertTokenizer.from_pretrained(path_or_name)
+        config = AutoConfig.from_pretrained(path_or_name)
+        tokenizer = AutoTokenizer.from_pretrained(path_or_name)
+        model = AutoModelForQuestionAnswering.from_config(config)
         user_params = default_params.copy()
         if params is not None:
             user_params.update(**params)
-        return cls(model, tokenizer, user_params)
+        return cls(model, config, tokenizer, user_params)

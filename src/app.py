@@ -37,24 +37,56 @@ def decode_text(text):
     return base64.b64decode(text).decode('utf8')
 
 
+def add_id_field(example):
+    qas = example['qas']
+    for i, q_dict in enumerate(qas):
+        if q_dict.get('id') is not None:
+            continue
+        qid = q_dict.get('qid', i)
+        q_dict['id'] = qid
+    return example['context'], qas
+
+
 def is_opt_encoded(data):
     return data.get('options', {}).get('encoded', False)
 
 
-def apply_fn_to_qa_fields(data, text_fn):
+def apply_fn_to_qa_example(data, fn):
     proc_data = data.copy()
     for i, par in enumerate(proc_data['paragraphs']):
         proc_par = par.copy()
-        proc_par['context'] = text_fn(par['context'])
+        proc_par['context'], proc_par['qas'] = fn(proc_par)
+        proc_data['paragraphs'][i] = proc_par
+    return proc_data
+
+
+def apply_fn_to_qa_fields(data, fn):
+    proc_data = data.copy()
+    for i, par in enumerate(proc_data['paragraphs']):
+        proc_par = par.copy()
+        proc_par['context'] = fn(par['context'])
         proc_par['qas'] = [
             {
                 'qid': qa['qid'],
-                'question': text_fn(qa['question'])
+                'question': fn(qa['question'])
             }
             for qa in par['qas']
         ]
         proc_data['paragraphs'][i] = proc_par
     return proc_data
+
+
+def format_answers(answers, nbest):
+    output_qas = []
+    for ans, best in zip(answers.items(), nbest.items()):
+        key = ans[0]
+        assert(key == best[0])
+        output_qas.append(dict(
+            qid=key,
+            text=ans[1],
+            results=best[1]
+        ))
+    return output_qas
 
 
 def preprocess_input(data):
@@ -64,7 +96,9 @@ def preprocess_input(data):
     if not is_opt_encoded(data):
         return data
 
-    return apply_fn_to_qa_fields(data, decode_text)
+    data = apply_fn_to_qa_fields(data, decode_text)
+    data = apply_fn_to_qa_example(data, add_id_field)
+    return data
 
 
 def prepare_response(data):
@@ -83,7 +117,11 @@ def setup_route(app, route, port, model_path):
         data = preprocess_input(request.get_json())
         if data is None:
             return jsonify({})
-        return jsonify(prepare_response(model.find_answer(data)))
+        n_best_size = int(data.get('k', 4))
+        answers, nbest = model.find_answer(data, n_best_size)
+        output_qas = format_answers(answers, nbest)
+        output_data = dict(options=data['options'], qas=output_qas)
+        return jsonify(prepare_response(output_data))
 
 
 def serve(model_path, route, port):

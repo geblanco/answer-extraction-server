@@ -11,7 +11,7 @@ from transformers import (
 )
 from transformers.data.processors.squad import SquadV2Processor
 
-data_dir = '/home/gb/Documents/Research/LIHLITH/squad-experiments/squad/'
+data_dir = 'squad-experiments/squad/'
 # dev_file = 'dev-v2.0_correct_format.json'
 
 proc = SquadV2Processor()
