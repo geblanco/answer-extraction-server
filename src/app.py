@@ -118,7 +118,7 @@ def setup_route(app, route, port, model_path):
         if data is None:
             return jsonify({})
         n_best_size = int(data.get('k', 4))
-        answers, nbest = model.find_answer(data, n_best_size)
+        answers, nbest = model.find_answers(data, n_best_size)
         output_qas = format_answers(answers, nbest)
         output_data = dict(options=data['options'], qas=output_qas)
         return jsonify(prepare_response(output_data))
