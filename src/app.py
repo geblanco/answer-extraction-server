@@ -109,7 +109,7 @@ def prepare_response(data):
 
 
 def setup_route(app, route, port, model_path):
-    model = TransformerQuestionAnswering.from_path(model_path)
+    model = TransformerQuestionAnswering.from_pretrained(model_path)
 
     @app.route(f'/{route}', methods=['POST'])
     def serve_route():

@@ -5,13 +5,11 @@ import concurrent.futures as cf
 
 from tqdm import tqdm
 from functools import partial
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
 from torch.utils.data import DataLoader, SequentialSampler
 from transformers import (
     AutoConfig,
     AutoTokenizer,
-    BertTokenizer,
-    BertForQuestionAnswering,
     AutoModelForQuestionAnswering,
 )
 from transformers.data.processors.squad import (
@@ -106,7 +104,6 @@ class QuestionAnswering(object):
                 features.append(feat)
 
         return features
-
 
 
 class TransformerQuestionAnswering(QuestionAnswering):
