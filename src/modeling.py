@@ -211,7 +211,7 @@ class TransformerQuestionAnswering(QuestionAnswering):
         # If null_score - best_non_null is greater than the
         # threshold predict null.
         threshold = self.params['null_score_diff_threshold']
-        predictions = compute_predictions_logits(
+        predictions, nbest = compute_predictions_logits(
             examples,
             features,
             all_results,
@@ -222,10 +222,10 @@ class TransformerQuestionAnswering(QuestionAnswering):
             null_score_diff_threshold=threshold,
             tokenizer=self.tokenizer,
         )
-        return predictions
+        return predictions, nbest
 
     def find_answers_simple(self, data, n_best_size=10, max_answer_length=30):
-        pass
+        raise NotImplementedError()
         # # ToDo := Fix threding conversion
         # all_results = []
         # batch_size = self.params['batch_size']
@@ -270,8 +270,11 @@ class TransformerQuestionAnswering(QuestionAnswering):
         #     answers = self.find_answers_batch(data)
         # else:
         #     answers = self.find_answers_simple(data)
-        if n_best_size < len(nbest[0]):
-            nbest = [best[:n_best_size] for best in nbest]
+        first_best = nbest[list(nbest.keys())[0]]
+        if n_best_size < len(first_best):
+            for key, value in nbest.items():
+                length = min(len(nbest[key]), n_best_size)
+                nbest[key] = nbest[key][:length]
         return answers, nbest
 
     @classmethod

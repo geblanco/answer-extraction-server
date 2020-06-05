@@ -30,7 +30,8 @@ def parse_args():
 
 
 def encode_text(text):
-    base64.b64encode(text.encode('utf8'))
+    # should be ascii compatible, but just in case....
+    return base64.b64encode(text.encode('utf8')).decode('utf8')
 
 
 def decode_text(text):
@@ -38,13 +39,15 @@ def decode_text(text):
 
 
 def add_id_field(example):
+    ex = example.copy()
     qas = example['qas']
     for i, q_dict in enumerate(qas):
         if q_dict.get('id') is not None:
             continue
         qid = q_dict.get('qid', i)
         q_dict['id'] = qid
-    return example['context'], qas
+    ex['qas'] = qas
+    return ex
 
 
 def is_opt_encoded(data):
@@ -52,15 +55,17 @@ def is_opt_encoded(data):
 
 
 def apply_fn_to_qa_example(data, fn):
+    if data is None or data.get('paragraphs', None) is None:
+        return None
     proc_data = data.copy()
     for i, par in enumerate(proc_data['paragraphs']):
-        proc_par = par.copy()
-        proc_par['context'], proc_par['qas'] = fn(proc_par)
-        proc_data['paragraphs'][i] = proc_par
+        proc_data['paragraphs'][i] = fn(par)
     return proc_data
 
 
-def apply_fn_to_qa_fields(data, fn):
+def apply_fn_to_qa_fields_example(data, fn):
+    if data is None or data.get('paragraphs') is None:
+        return None
     proc_data = data.copy()
     for i, par in enumerate(proc_data['paragraphs']):
         proc_par = par.copy()
@@ -74,6 +79,18 @@ def apply_fn_to_qa_fields(data, fn):
         ]
         proc_data['paragraphs'][i] = proc_par
     return proc_data
+
+
+def apply_fn_to_qa_fields_answer(data, fn):
+    if data is None or data.get('qas') is None:
+        return None
+    for qa_index, qa in enumerate(data['qas']):
+        qa['text'] = fn(qa['text'])
+        for i, result in enumerate(qa['results']):
+            result['text'] = fn(result['text'])
+            qa['results'][i] = result
+        data['qas'][qa_index] = qa
+    return data
 
 
 def format_answers(answers, nbest):
@@ -96,7 +113,7 @@ def preprocess_input(data):
     if not is_opt_encoded(data):
         return data
 
-    data = apply_fn_to_qa_fields(data, decode_text)
+    data = apply_fn_to_qa_fields_example(data, decode_text)
     data = apply_fn_to_qa_example(data, add_id_field)
     return data
 
@@ -104,7 +121,7 @@ def preprocess_input(data):
 def prepare_response(data):
     if is_opt_encoded(data):
         # encode data
-        data = apply_fn_to_qa_fields(data, encode_text)
+        data = apply_fn_to_qa_fields_answer(data, encode_text)
     return data
 
 
@@ -127,7 +144,7 @@ def setup_route(app, route, port, model_path):
 def serve(model_path, route, port):
     app = Flask(__name__)
     model_path = os.path.join(os.path.abspath(os.path.curdir), model_path)
-    print(f'Serving {model_path} in {route}:{port}')
+    print(f'Serving {model_path} in <>:{port}/{route}')
     setup_route(app, route, port, model_path)
     # serve on all interfaces with ip on given port
     http_server = WSGIServer(('0.0.0.0', port), app)
