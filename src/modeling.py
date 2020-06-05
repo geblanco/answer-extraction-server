@@ -202,6 +202,10 @@ class TransformerQuestionAnswering(QuestionAnswering):
             batch_size=self.params['batch_size']
         )
 
+        print('***** Running evaluation *****')
+        print('  Num examples = %d', len(dataset))
+        print('  Batch size = %d', self.params['batch_size'])
+
         all_results = []
 
         for batch in tqdm(dataloader, desc="Evaluating"):
