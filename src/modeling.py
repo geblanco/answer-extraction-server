@@ -65,6 +65,9 @@ class QuestionAnswering(object):
     def to_list(tensor):
         return tensor.detach().cpu().tolist()
 
+    """
+    Unused
+    """
     @staticmethod
     def features_to_tensors(features):
         all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
@@ -113,6 +116,7 @@ class TransformerQuestionAnswering(QuestionAnswering):
         self.config = config
         self.tokenizer = tokenizer
         self.params = params
+        self.model.to(self.params['device'])
 
     def forward_batch_for_results(self, features, batch):
         all_results = []
@@ -283,10 +287,12 @@ class TransformerQuestionAnswering(QuestionAnswering):
 
     @classmethod
     def from_pretrained(cls, path_or_name, params=None):
-        config = AutoConfig.from_pretrained(path_or_name)
-        tokenizer = AutoTokenizer.from_pretrained(path_or_name)
-        model = AutoModelForQuestionAnswering.from_config(config)
-        user_params = default_params.copy()
+        m_params = default_params.copy()
         if params is not None:
-            user_params.update(**params)
-        return cls(model, config, tokenizer, user_params)
+            m_params.update(**params)
+        config = AutoConfig.from_pretrained(path_or_name)
+        tokenizer = AutoTokenizer.from_pretrained(
+            path_or_name, do_lower_case=m_params.get('do_lower_case', False)
+        )
+        model = AutoModelForQuestionAnswering.from_config(config)
+        return cls(model, config, tokenizer, m_params)
