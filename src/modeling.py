@@ -206,9 +206,10 @@ class TransformerQuestionAnswering(QuestionAnswering):
             batch_size=self.params['batch_size']
         )
 
+        print()
         print('***** Running evaluation *****')
-        print('  Num examples = %d', len(dataset))
-        print('  Batch size = %d', self.params['batch_size'])
+        print('  Num examples = ', len(dataset))
+        print('  Batch size = ', self.params['batch_size'])
 
         all_results = []
 
@@ -288,6 +289,10 @@ class TransformerQuestionAnswering(QuestionAnswering):
     @classmethod
     def from_pretrained(cls, path_or_name, params=None):
         m_params = default_params.copy()
+        m_params['device'] = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        m_params['n_gpu'] = torch.cuda.device_count()
         if params is not None:
             m_params.update(**params)
         config = AutoConfig.from_pretrained(path_or_name)
