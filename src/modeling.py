@@ -299,5 +299,8 @@ class TransformerQuestionAnswering(QuestionAnswering):
         tokenizer = AutoTokenizer.from_pretrained(
             path_or_name, do_lower_case=m_params.get('do_lower_case', False)
         )
-        model = AutoModelForQuestionAnswering.from_config(config)
+        model = AutoModelForQuestionAnswering.from_pretrained(path_or_name,
+            from_tf=bool(".ckpt" in path_or_name),
+            config=config,
+        )
         return cls(model, config, tokenizer, m_params)
