@@ -32,7 +32,7 @@ def extract_answer(question, context, q_id, c_id):
     # using params instead of data because we are making this POST request by
     # constructing query string URL with key/value pairs in it.
 
-    r = requests.post(url, data=data, headers=headers)
+    r = requests.post(url, json=data, headers=headers)
     return r
 
 context = """One of the first Norman mercenaries to serve as a Byzantine general
