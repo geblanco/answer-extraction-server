@@ -1,5 +1,5 @@
-torch
-transformers
+torch==1.8.1
+transformers==4.6.1
 flask
 gevent
 tqdm

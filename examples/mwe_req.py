@@ -14,7 +14,7 @@ def extract_answer(question, context, q_id, c_id):
     encoded_q = base64.b64encode(question.encode('utf8')).decode('utf-8')
     encoded_c = base64.b64encode(context.encode('utf8')).decode('utf-8')
 
-    url = "<server>"
+    url = "http://vespa.lsi.uned.es:9020/answer_extraction"
     headers = {'Content-Type': 'application/json',
                'charset': 'utf-8'}
     data = {"paragraphs": [{

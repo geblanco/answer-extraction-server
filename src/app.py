@@ -6,8 +6,7 @@ import argparse
 from flask import Flask, request, jsonify
 from gevent.pywsgi import WSGIServer
 
-# from qa_system import QA_System
-from modeling import TransformerQuestionAnswering
+from pipeline import QuestionAnswering
 
 DEFAULT_ROUTE = 'qa-extraction'
 DEFAULT_PORT = 8000
@@ -82,28 +81,17 @@ def apply_fn_to_qa_fields_example(data, fn):
 
 
 def apply_fn_to_qa_fields_answer(data, fn):
-    if data is None or data.get('qas') is None:
+    if data is None or data.get('paragraphs') is None:
         return None
-    for qa_index, qa in enumerate(data['qas']):
-        qa['text'] = fn(qa['text'])
-        for i, result in enumerate(qa['results']):
-            result['text'] = fn(result['text'])
-            qa['results'][i] = result
-        data['qas'][qa_index] = qa
+    for qa_index, par in enumerate(data['paragraphs']):
+        par_cpy = par.copy()
+        for i, qas in enumerate(par['qas']):
+            qas_cpy = qas.copy()
+            for res in qas_cpy['results']:
+                res['answer'] = fn(res['answer'])
+        par_cpy[i] = qas_cpy
+        data['paragraphs'][qa_index] = par_cpy
     return data
-
-
-def format_answers(answers, nbest):
-    output_qas = []
-    for ans, best in zip(answers.items(), nbest.items()):
-        key = ans[0]
-        assert(key == best[0])
-        output_qas.append(dict(
-            qid=key,
-            text=ans[1],
-            results=best[1]
-        ))
-    return output_qas
 
 
 def preprocess_input(data):
@@ -126,7 +114,8 @@ def prepare_response(data):
 
 
 def setup_route(app, route, port, model_path):
-    model = TransformerQuestionAnswering.from_pretrained(model_path)
+    # model = TransformerQuestionAnswering.from_pretrained(model_path)
+    model = QuestionAnswering(model_path)
 
     @app.route(f'/{route}', methods=['POST'])
     def serve_route():
@@ -135,9 +124,10 @@ def setup_route(app, route, port, model_path):
         if data is None:
             return jsonify({})
         n_best_size = int(data.get('k', 4))
-        answers, nbest = model.find_answers(data, n_best_size)
-        output_qas = format_answers(answers, nbest)
-        output_data = dict(options=data['options'], qas=output_qas)
+        if data.get('paragraphs', None) is None:
+            return jsonify({})
+        answers = model.find_answers(data.get('paragraphs'), n_best_size)
+        output_data = dict(options=data['options'], paragraphs=answers)
         return jsonify(prepare_response(output_data))
 
 
