@@ -1,0 +1,11 @@
+version '3'
+services:
+  answer_extraction:
+    build:
+      context: ./
+    volumes:
+      - ./models:/usr/app/models
+    ports:
+      - '9018:8000'
+    command: ["--route", "answer_extraction", "--model", "models/multibert/cased_v100"]
+
