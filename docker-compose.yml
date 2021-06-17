@@ -3,6 +3,7 @@ services:
   answer_extraction:
     build:
       context: ./
+      dockerfile: Dockerfile
     volumes:
       - ./models:/usr/app/models
     ports:
